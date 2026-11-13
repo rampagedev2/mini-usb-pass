@@ -1,8 +1,12 @@
 /build/
 /out/
+/bin/
+/obj/
 /cmake-build-*/
 *.user
 *.suo
+*.sdf
+*.opensdf
 *.obj
 *.o
 *.exe
@@ -10,4 +14,7 @@
 *.ilk
 *.exp
 *.lib
+*.ncb
+*.ipch
 .vs/
+ipch/

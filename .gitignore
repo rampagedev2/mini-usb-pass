@@ -1,0 +1,13 @@
+/build/
+/out/
+/cmake-build-*/
+*.user
+*.suo
+*.obj
+*.o
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.lib
+.vs/

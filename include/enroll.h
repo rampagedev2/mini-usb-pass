@@ -8,16 +8,19 @@
 extern "C" {
 #endif
 
+/* Packed ASCII cache — keeps .data small (passwords are ASCII for HID). */
+#pragma pack(push, 1)
 typedef struct LocalPassword {
-  BOOL  used;
-  WCHAR text[MAX_PASSWORD_LEN];
+  UCHAR used;
+  CHAR  text[MAX_PASSWORD_LEN];
 } LocalPassword;
 
 typedef struct FingerState {
-  BOOL enrolled;
-  int  password_count;
+  UCHAR enrolled;
+  UCHAR password_count;
   LocalPassword passwords[MAX_PASSWORDS_PER_FINGER];
 } FingerState;
+#pragma pack(pop)
 
 BOOL EnrollFingerprint(HANDLE device, int finger_index);
 BOOL ClearFinger(HANDLE device, int finger_index);
@@ -30,8 +33,8 @@ BOOL InitDevice(HANDLE device);
 BOOL SetLoginPassword(HANDLE device, const WCHAR *password);
 BOOL BackupDevice(HANDLE device, const WCHAR *path);
 
-/* Wide ↔ ASCII helpers shared by enroll/manage. */
 BOOL WideToAsciiPassword(const WCHAR *wide, CHAR *out, int out_cap, UCHAR *out_len);
+void AsciiPasswordToWide(const CHAR *in, WCHAR *out, int out_cap);
 
 #ifdef __cplusplus
 }

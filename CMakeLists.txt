@@ -14,7 +14,6 @@ add_executable(mini_usb_pass WIN32
   src/ui.c
   src/device.c
   src/enroll.c
-  src/app.rc
 )
 
 target_include_directories(mini_usb_pass PRIVATE
@@ -30,24 +29,37 @@ target_compile_definitions(mini_usb_pass PRIVATE
 
 # Prefer size over speed; keep CRT usage minimal via system DLLs only.
 if(MSVC)
-  target_compile_options(mini_usb_pass PRIVATE /O1 /GS- /Gy /W4)
-  target_link_options(mini_usb_pass PRIVATE /OPT:REF /OPT:ICF /INCREMENTAL:NO)
+  target_compile_options(mini_usb_pass PRIVATE
+    /O1 /Os /GS- /Gy /Gd /W3 /GL
+  )
+  target_link_options(mini_usb_pass PRIVATE
+    /LTCG /OPT:REF /OPT:ICF /INCREMENTAL:NO /MERGE:.rdata=.text
+  )
 else()
   target_compile_options(mini_usb_pass PRIVATE
-    -Os
+    -Oz
     -ffunction-sections
     -fdata-sections
     -fno-asynchronous-unwind-tables
+    -fno-unwind-tables
     -fno-exceptions
+    -fno-stack-protector
+    -fomit-frame-pointer
+    -fno-ident
+    -fno-math-errno
+    -flto
     -Wall
     -Wextra
   )
   target_link_options(mini_usb_pass PRIVATE
     -municode
+    -flto
     -s
     -Wl,--gc-sections
     -Wl,--as-needed
-    -static-libgcc
+    -Wl,-O1
+    -Wl,--strip-all
+    -Wl,--exclude-all-symbols
   )
 endif()
 
@@ -55,9 +67,7 @@ target_link_libraries(mini_usb_pass PRIVATE
   user32
   gdi32
   comctl32
-  comdlg32
   setupapi
-  advapi32
 )
 
 if(MINI_USB_PASS_SIZE_CHECK)

@@ -29,14 +29,17 @@ BOOL WideToAsciiPassword(const WCHAR *wide, CHAR *out, int out_cap, UCHAR *out_l
   return TRUE;
 }
 
-static void AsciiToWide(const CHAR *in, UCHAR len, WCHAR *out, int out_cap)
+void AsciiPasswordToWide(const CHAR *in, WCHAR *out, int out_cap)
 {
   int i;
-  int n = len;
-  if (n >= out_cap) {
-    n = out_cap - 1;
+  if (!out || out_cap <= 0) {
+    return;
   }
-  for (i = 0; i < n; ++i) {
+  if (!in) {
+    out[0] = 0;
+    return;
+  }
+  for (i = 0; in[i] && i < out_cap - 1; ++i) {
     out[i] = (WCHAR)(unsigned char)in[i];
   }
   out[i] = 0;
@@ -45,6 +48,7 @@ static void AsciiToWide(const CHAR *in, UCHAR len, WCHAR *out, int out_cap)
 static BOOL LocalAddPassword(FingerState *local, const WCHAR *password)
 {
   int i;
+  UCHAR len = 0;
   if (!local || !password) {
     return FALSE;
   }
@@ -54,8 +58,11 @@ static BOOL LocalAddPassword(FingerState *local, const WCHAR *password)
   }
   for (i = 0; i < MAX_PASSWORDS_PER_FINGER; ++i) {
     if (!local->passwords[i].used) {
-      lstrcpynW(local->passwords[i].text, password, MAX_PASSWORD_LEN);
-      local->passwords[i].used = TRUE;
+      if (!WideToAsciiPassword(password, local->passwords[i].text,
+                               MAX_PASSWORD_LEN, &len)) {
+        return FALSE;
+      }
+      local->passwords[i].used = 1;
       local->password_count++;
       return TRUE;
     }
@@ -76,7 +83,7 @@ static void LocalDeleteSlot(FingerState *local, int slot)
   for (i = slot; i < MAX_PASSWORDS_PER_FINGER - 1; ++i) {
     local->passwords[i] = local->passwords[i + 1];
   }
-  local->passwords[MAX_PASSWORDS_PER_FINGER - 1].used = FALSE;
+  local->passwords[MAX_PASSWORDS_PER_FINGER - 1].used = 0;
   local->passwords[MAX_PASSWORDS_PER_FINGER - 1].text[0] = 0;
   if (local->password_count > 0) {
     local->password_count--;
@@ -144,7 +151,6 @@ BOOL AddPassword(HANDLE device, int finger_index, const WCHAR *password, FingerS
 
   if (!device_ok) {
     SetLastError(ERROR_IO_DEVICE);
-    /* Password kept in app list for review; device sync pending. */
   }
   return TRUE;
 }
@@ -202,9 +208,18 @@ BOOL RefreshPasswords(HANDLE device, int finger_index, FingerState *local)
     resp.count = MAX_PASSWORDS_PER_FINGER;
   }
   for (i = 0; i < resp.count; ++i) {
-    AsciiToWide(resp.entries[i].password, resp.entries[i].password_len,
-                local->passwords[i].text, MAX_PASSWORD_LEN);
-    local->passwords[i].used = TRUE;
+    UCHAR n = resp.entries[i].password_len;
+    if (n >= MAX_PASSWORD_LEN) {
+      n = MAX_PASSWORD_LEN - 1;
+    }
+    {
+      UCHAR k;
+      for (k = 0; k < n; ++k) {
+        local->passwords[i].text[k] = resp.entries[i].password[k];
+      }
+      local->passwords[i].text[n] = 0;
+    }
+    local->passwords[i].used = 1;
     local->password_count++;
   }
   return TRUE;
@@ -238,33 +253,40 @@ BOOL SetLoginPassword(HANDLE device, const WCHAR *password)
 
 BOOL BackupDevice(HANDLE device, const WCHAR *path)
 {
-  FpBackupResponse resp;
+  /* Heap the payload so the PE image stays small (no huge static/stack blob in code). */
+  FpBackupResponse *resp;
   DWORD br = 0;
   HANDLE file;
   DWORD written = 0;
+  BOOL ok = FALSE;
 
   if (device == NULL || device == INVALID_HANDLE_VALUE || path == NULL) {
     SetLastError(ERROR_INVALID_HANDLE);
     return FALSE;
   }
 
-  ZeroMemory(&resp, sizeof(resp));
-  if (!DeviceSendCommand(device, IOCTL_FP_BACKUP, NULL, 0, &resp, sizeof(resp), &br)) {
+  resp = (FpBackupResponse *)LocalAlloc(LPTR, sizeof(*resp));
+  if (!resp) {
     return FALSE;
   }
-  if (resp.size == 0 || resp.size > sizeof(resp.data)) {
+
+  if (!DeviceSendCommand(device, IOCTL_FP_BACKUP, NULL, 0, resp, sizeof(*resp), &br)) {
+    LocalFree(resp);
+    return FALSE;
+  }
+  if (resp->size == 0 || resp->size > sizeof(resp->data)) {
+    LocalFree(resp);
     SetLastError(ERROR_INVALID_DATA);
     return FALSE;
   }
 
   file = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
   if (file == INVALID_HANDLE_VALUE) {
+    LocalFree(resp);
     return FALSE;
   }
-  if (!WriteFile(file, resp.data, resp.size, &written, NULL) || written != resp.size) {
-    CloseHandle(file);
-    return FALSE;
-  }
+  ok = WriteFile(file, resp->data, resp->size, &written, NULL) && written == resp->size;
   CloseHandle(file);
-  return TRUE;
+  LocalFree(resp);
+  return ok;
 }

@@ -5,7 +5,6 @@
 #include "protocol.h"
 
 #include <commctrl.h>
-#include <commdlg.h>
 
 enum {
   ID_TABS = 2000,
@@ -52,18 +51,15 @@ typedef struct AppState {
   HWND edit_login2;
   HFONT font_ui;
   HFONT font_title;
-  HFONT font_small;
-  HFONT font_chip;
   HBRUSH br_bg;
   HBRUSH br_panel;
   HBRUSH br_header;
   HBRUSH br_footer;
   HBRUSH br_accent;
-  HBRUSH br_chip;
   HANDLE device;
   int selected_finger;
   BOOL connected;
-  FingerState fingers[MAX_FINGERS];
+  FingerState *fingers; /* heap — keep PE image small */
 } AppState;
 
 static AppState g;
@@ -247,7 +243,7 @@ static void PaintPalm(HDC hdc, const HandGeom *hand, const WCHAR *caption)
   FillRound(hdc, &hand->palm, 18, HAND_FILL, HAND_LINE);
   label.top = hand->palm.bottom - 18;
   SetTextColor(hdc, HAND_LINE);
-  SelectObject(hdc, g.font_small);
+  SelectObject(hdc, g.font_ui);
   DrawTextW(hdc, caption, -1, &label, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
@@ -283,7 +279,7 @@ static void PaintFingerGeom(HDC hdc, int index, const FingerGeom *f)
     RECT lab = f->rc;
     wsprintfW(label, L"%d", index + 1);
     SetTextColor(hdc, text);
-    SelectObject(hdc, g.font_chip);
+    SelectObject(hdc, g.font_ui);
     DrawTextW(hdc, label, -1, &lab, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
   }
 
@@ -293,7 +289,7 @@ static void PaintFingerGeom(HDC hdc, int index, const FingerGeom *f)
     wsprintfW(b, L"%d", count);
     badge.top = f->rc.bottom - 14;
     SetTextColor(hdc, sel ? RGB(204, 251, 241) : COL_MUTED);
-    SelectObject(hdc, g.font_small);
+    SelectObject(hdc, g.font_ui);
     DrawTextW(hdc, b, -1, &badge, DT_CENTER | DT_SINGLELINE);
   }
 }
@@ -368,8 +364,10 @@ static void RefreshPasswordList(void)
   SendMessageW(g.list_pass, LB_RESETCONTENT, 0, 0);
   for (i = 0; i < MAX_PASSWORDS_PER_FINGER; ++i) {
     if (fs->passwords[i].used) {
-      WCHAR line[MAX_PASSWORD_LEN + 16];
-      wsprintfW(line, L"%d.  %s", i + 1, fs->passwords[i].text);
+      WCHAR text[MAX_PASSWORD_LEN];
+      WCHAR line[MAX_PASSWORD_LEN + 8];
+      AsciiPasswordToWide(fs->passwords[i].text, text, MAX_PASSWORD_LEN);
+      wsprintfW(line, L"%d.  %s", i + 1, text);
       SendMessageW(g.list_pass, LB_ADDSTRING, 0, (LPARAM)line);
     }
   }
@@ -573,31 +571,31 @@ static void OnSetLogin(void)
 
 static void OnBackup(void)
 {
-  OPENFILENAMEW ofn;
   WCHAR path[MAX_PATH];
+  WCHAR *slash;
+  DWORD n;
 
   if (!RequireDevice()) {
     return;
   }
 
-  lstrcpyW(path, L"usb_pass_backup.bin");
-  ZeroMemory(&ofn, sizeof(ofn));
-  ofn.lStructSize = sizeof(ofn);
-  ofn.hwndOwner = g.hwnd;
-  ofn.lpstrFilter = L"Backup (*.bin)\0*.bin\0All files (*.*)\0*.*\0";
-  ofn.lpstrFile = path;
-  ofn.nMaxFile = MAX_PATH;
-  ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
-  ofn.lpstrDefExt = L"bin";
-
-  if (!GetSaveFileNameW(&ofn)) {
+  /* Write beside the exe — avoids comdlg32 and keeps the image small. */
+  n = GetModuleFileNameW(NULL, path, MAX_PATH);
+  if (n == 0 || n >= MAX_PATH) {
+    SetStatusError(L"Backup path failed");
     return;
   }
+  slash = path + n;
+  while (slash > path && slash[-1] != L'\\' && slash[-1] != L'/') {
+    --slash;
+  }
+  lstrcpyW(slash, L"usb_pass_backup.bin");
+
   if (!BackupDevice(g.device, path)) {
     SetStatusError(L"Backup failed");
     return;
   }
-  SetStatus(L"Backup saved");
+  SetStatus(L"Backup saved beside app");
 }
 
 /* ---- layout / panels ---- */
@@ -676,7 +674,7 @@ static void CreateFingerPanel(HWND parent)
   MkStatic(g.panel_finger,
       L"Click a finger, place it on the sensor, then enroll.\n"
       L"Dot = enrolled. Number at base = password count.",
-      20, 196, 400, 40, ID_HINT_FINGER, g.font_small);
+      20, 196, 400, 40, ID_HINT_FINGER, g.font_ui);
 
   MkButton(g.panel_finger, L"Enroll fingerprint", 20, 244, 160, 34, ID_BTN_ENROLL, TRUE);
   MkButton(g.panel_finger, L"Clear slot", 192, 244, 110, 34, ID_BTN_CLEAR_FINGER, FALSE);
@@ -707,7 +705,7 @@ static void CreatePasswordPanel(HWND parent)
 
   MkStatic(g.panel_pass,
       L"Up to 8 passwords per finger. Touch types as a keyboard.",
-      160, 406, 260, 32, ID_HINT_PASS, g.font_small);
+      160, 406, 260, 32, ID_HINT_PASS, g.font_ui);
 }
 
 static void CreateManagePanel(HWND parent)
@@ -718,7 +716,7 @@ static void CreateManagePanel(HWND parent)
   MkStatic(g.panel_manage, L"Device management", 20, 16, 240, 22, 0, g.font_ui);
   MkStatic(g.panel_manage,
       L"Initialize wipes enrollments. Login password gates settings access on the stick. Backup exports device data.",
-      20, 42, 420, 40, ID_HINT_MANAGE, g.font_small);
+      20, 42, 420, 40, ID_HINT_MANAGE, g.font_ui);
 
   MkButton(g.panel_manage, L"Initialize device", 20, 96, 160, 34, ID_BTN_INIT, FALSE);
 
@@ -728,7 +726,7 @@ static void CreateManagePanel(HWND parent)
   g.edit_login2 = MkEdit(g.panel_manage, 20, 234, 260, 26, ID_EDIT_LOGIN2, MAX_LOGIN_LEN);
   MkButton(g.panel_manage, L"Set login password", 20, 274, 160, 32, ID_BTN_SET_LOGIN, TRUE);
 
-  MkButton(g.panel_manage, L"Backup device…", 20, 330, 160, 34, ID_BTN_BACKUP, FALSE);
+  MkButton(g.panel_manage, L"Backup device", 20, 330, 160, 34, ID_BTN_BACKUP, FALSE);
 }
 
 /* ---- painting / window procs ---- */
@@ -754,7 +752,7 @@ static void PaintHeader(HDC hdc, RECT *rc)
   DrawTextW(hdc, APP_NAME, -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
   SetTextColor(hdc, RGB(148, 163, 184));
-  SelectObject(hdc, g.font_small);
+  SelectObject(hdc, g.font_ui);
   DrawTextW(hdc, L"Fingerprint device settings", -1, &sub, DT_LEFT | DT_SINGLELINE);
 
   SetRect(&pill, rc->right - 166, 26, rc->right - 156, 36);
@@ -858,7 +856,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     g.status = CreateWindowExW(0, L"STATIC", ready,
         WS_CHILD | WS_VISIBLE, 0, 0, 100, 20, hwnd,
         (HMENU)(INT_PTR)ID_STATUS, g.inst, NULL);
-    SendMessageW(g.status, WM_SETFONT, (WPARAM)g.font_small, TRUE);
+    SendMessageW(g.status, WM_SETFONT, (WPARAM)g.font_ui, TRUE);
 
     ShowTab(TAB_FINGER);
     Layout(hwnd);
@@ -923,31 +921,24 @@ BOOL UiInit(HINSTANCE inst)
   INITCOMMONCONTROLSEX icc;
 
   g.inst = inst;
-  ZeroMemory(g.fingers, sizeof(g.fingers));
+  g.fingers = (FingerState *)LocalAlloc(LPTR, sizeof(FingerState) * MAX_FINGERS);
+  if (!g.fingers) {
+    return FALSE;
+  }
 
   icc.dwSize = sizeof(icc);
   icc.dwICC = ICC_STANDARD_CLASSES | ICC_TAB_CLASSES;
   InitCommonControlsEx(&icc);
 
-  g.font_ui = CreateFontW(15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-      DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-  g.font_title = CreateFontW(20, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET,
-      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-      DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-  g.font_small = CreateFontW(12, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-      DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-  g.font_chip = CreateFontW(16, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET,
-      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-      DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+  /* Stock fonts — no CreateFont / font-name strings in the image */
+  g.font_ui = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+  g.font_title = (HFONT)GetStockObject(SYSTEM_FONT);
 
   g.br_bg = CreateSolidBrush(COL_BG);
   g.br_panel = CreateSolidBrush(COL_PANEL);
   g.br_header = CreateSolidBrush(COL_HEADER);
   g.br_footer = CreateSolidBrush(COL_FOOTER);
   g.br_accent = CreateSolidBrush(COL_ACCENT);
-  g.br_chip = CreateSolidBrush(COL_CHIP);
 
   ZeroMemory(&wc, sizeof(wc));
   wc.cbSize = sizeof(wc);
@@ -989,16 +980,16 @@ BOOL UiInit(HINSTANCE inst)
 
 void UiShutdown(void)
 {
-  if (g.font_ui) DeleteObject(g.font_ui);
-  if (g.font_title) DeleteObject(g.font_title);
-  if (g.font_small) DeleteObject(g.font_small);
-  if (g.font_chip) DeleteObject(g.font_chip);
+  /* Stock fonts must not be deleted. */
+  if (g.fingers) {
+    LocalFree(g.fingers);
+    g.fingers = NULL;
+  }
   if (g.br_bg) DeleteObject(g.br_bg);
   if (g.br_panel) DeleteObject(g.br_panel);
   if (g.br_header) DeleteObject(g.br_header);
   if (g.br_footer) DeleteObject(g.br_footer);
   if (g.br_accent) DeleteObject(g.br_accent);
-  if (g.br_chip) DeleteObject(g.br_chip);
 }
 
 HWND UiCreateMainWindow(HINSTANCE inst, int show)
